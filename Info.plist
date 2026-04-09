@@ -19,7 +19,9 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.90.0</string>
 	<key>CFBundleVersion</key>
-	<string>90</string>
+	<string>91</string>
+	<key>NSCameraUsageDescription</key>
+	<string>DroidStar does not use the camera, but a linked library references the Camera API.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>You know you want to...</string>
 	<key>UILaunchStoryboardName</key>
