@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(DroidStar VERSION 1.0 LANGUAGES C CXX)
+project(DroidStar VERSION 0.90.0 LANGUAGES C CXX)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
@@ -103,7 +103,7 @@ qt_add_qml_module(DroidStar
 )
 
 execute_process(
-    COMMAND git rev-parse --short HEAD
+    COMMAND git describe --tags --always
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
     OUTPUT_VARIABLE VERSION_NUMBER
     OUTPUT_STRIP_TRAILING_WHITESPACE
