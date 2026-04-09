@@ -81,21 +81,30 @@ void AudioEngine::init()
 		QAudioDevice device(QMediaDevices::defaultAudioOutput());
 		for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it ) {
 
-            qDebug() << "Playback device name = " << (*it).description();
-            qDebug() << (*it).supportedSampleFormats();
-            qDebug() << (*it).preferredFormat();
+            //qDebug() << "Playback device name = " << (*it).description();
+            //qDebug() << (*it).supportedSampleFormats();
+            //qDebug() << (*it).preferredFormat();
+            //qDebug() << (*it).minimumSampleRate();
+            //qDebug() << (*it).maximumSampleRate();
+
 
 			if((*it).description() == m_outputdevice){
 				device = *it;
 			}
 		}
 		if (!device.isFormatSupported(format)) {
-            qWarning() << "Raw audio format not supported by playback device";
+            qWarning() << "Current audio format not supported by playback device";
         }
 
         qDebug() << "Playback device: " << device.description() << "SR: " << format.sampleRate();
 
-        m_out = new QAudioSink(device, format, this);
+        try{
+            m_out = new QAudioSink(device, format, this);
+        }
+        catch (const std::exception& e) {
+            qDebug() << "Exception in constructor:" << e.what();
+        }
+
 		m_out->setBufferSize(1280);
 		connect(m_out, SIGNAL(stateChanged(QAudio::State)), this, SLOT(handleStateChanged(QAudio::State)));
 	}
@@ -108,17 +117,18 @@ void AudioEngine::init()
 	else{
 		QAudioDevice device(QMediaDevices::defaultAudioInput());
 		for (QList<QAudioDevice>::ConstIterator it = devices.constBegin(); it != devices.constEnd(); ++it ) {
-			if(MACHAK){
-				qDebug() << "Playback device name = " << (*it).description();
-				qDebug() << (*it).supportedSampleFormats();
-				qDebug() << (*it).preferredFormat();
-			}
+            //qDebug() << "Capture device name = " << (*it).description();
+            //qDebug() << (*it).supportedSampleFormats();
+            //qDebug() << (*it).preferredFormat();
+            //qDebug() << (*it).minimumSampleRate();
+            //qDebug() << (*it).maximumSampleRate();
+
 			if((*it).description() == m_inputdevice){
 				device = *it;
 			}
 		}
 		if (!device.isFormatSupported(format)) {
-            qWarning() << "Raw audio format not supported by capture device";
+            qWarning() << "Current audio format not supported by capture device";
         }
 
 		int sr = 8000;
@@ -152,14 +162,21 @@ void AudioEngine::stop_capture()
 
 void AudioEngine::start_playback()
 {
-	m_outdev = m_out->start();
+	if (m_out) {
+		// Only start if stopped or suspended - IdleState and ActiveState mean already started
+		if (m_out->state() == QAudio::StoppedState || m_out->state() == QAudio::SuspendedState) {
+			m_outdev = m_out->start();
+		}
+	}
 }
 
 void AudioEngine::stop_playback()
 {
-	//m_outdev->reset();
-	m_out->reset();
-	m_out->stop();
+	if (m_out) {
+		//m_outdev->reset();
+		m_out->reset();
+		m_out->stop();
+	}
 }
 
 void AudioEngine::input_data_received()
@@ -359,16 +376,16 @@ void AudioEngine::handleStateChanged(QAudio::State newState)
 {
 	switch (newState) {
 	case QAudio::ActiveState:
-		//qDebug() << "AudioOut state active";
+        //qDebug() << "AudioOut state active";
 		break;
 	case QAudio::SuspendedState:
-		//qDebug() << "AudioOut state suspended";
+        //qDebug() << "AudioOut state suspended";
 		break;
 	case QAudio::IdleState:
-		//qDebug() << "AudioOut state idle";
+        //qDebug() << "AudioOut state idle";
 		break;
 	case QAudio::StoppedState:
-		//qDebug() << "AudioOut state stopped";
+        //qDebug() << "AudioOut state stopped";
 		break;
 	default:
 		break;

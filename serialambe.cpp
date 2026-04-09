@@ -22,7 +22,6 @@
 #ifndef Q_OS_ANDROID
 #include <QSerialPortInfo>
 #endif
-#include <algorithm>
 #include "serialambe.h"
 
 #define ENDLINE "\n"
@@ -99,7 +98,7 @@ void SerialAMBE::connect_to_serial(QString p)
 	const QString blankString = "N/A";
 	int br = 460800;
 
-	if((m_protocol != "P25") && (m_protocol != "M17") && (p != "")){
+	if((m_protocol != "P25") && (m_protocol != "M17") && (p != "None")  && (p != "Software vocoder")){
 #ifndef Q_OS_ANDROID
 		m_serial = new QSerialPort;
 		QSerialPortInfo info(*m_serial);
@@ -120,6 +119,7 @@ void SerialAMBE::connect_to_serial(QString p)
 #else
 		m_serial = &AndroidSerialPort::GetInstance();
         connect(m_serial, SIGNAL(device_ready()), this, SLOT(config_ambe()));
+        //connect(m_serial, SIGNAL(device_denied()), this, SLOT(config_ambe()));
 #endif
 		m_serial->setPortName(p);
 		m_serial->setBaudRate(br);

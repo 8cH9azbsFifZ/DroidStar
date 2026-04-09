@@ -26,7 +26,7 @@ class IAX : public Mode
 public:
 	IAX();//QString callsign, QString username, QString password, QString node, QString host, int port, QString audioin, QString audioout);
 	~IAX();
-	void set_iax_params(QString username, QString password, QString node, QString host, int port);
+	void set_iax_params(QString username, QString password, QString callingname, QString node, QString host, int port);
 	//uint8_t get_status(){ return m_status; }
 	QString get_host() { return m_host; }
 	int get_port() { return m_port; }
@@ -38,12 +38,13 @@ private slots:
 	void send_disconnect();
 	void hostname_lookup(QHostInfo i);
 	void send_registration(uint16_t dcall = 0);
+    void send_calltoken_request();
 	void send_call();
 	void send_call_auth();
-	void send_ack(uint16_t, uint16_t, uint8_t, uint8_t);
-	void send_lag_response();
+    void send_ack(uint16_t, uint16_t, uint8_t, uint8_t, uint32_t ts = 0);
+    void send_lag_response(uint32_t);
 	void send_ping();
-	void send_pong();
+    void send_pong(uint32_t);
 	void toggle_tx(bool);
 	void start_tx();
 	void stop_tx();
@@ -54,12 +55,12 @@ private slots:
 	void send_radio_key(bool);
 	void in_audio_vol_changed(qreal v){ m_audio->set_input_volume(v); }
 	void out_audio_vol_changed(qreal v){ m_audio->set_output_volume(v); }
+	void connected();
 private:
-	QUdpSocket *m_udp = nullptr;
-	QHostAddress m_address;
-	QString m_callsign;
 	QString m_username;
 	QString m_password;
+	QString m_callingname;
+    QByteArray m_calltoken;
 	QString m_node;
 	QString m_context;
 	QString m_host;
@@ -69,16 +70,10 @@ private:
 	uint16_t m_regscallno;
 	uint16_t m_regdcallno;
 	int m_id;
-	QString m_audioin;
-	QString m_audioout;
 	qint64 m_timestamp;
 	uint8_t m_regstat;
 	QByteArray m_md5seed;
 	QTimer *m_regtimer;
-	QTimer *m_pingtimer;
-	QTimer *m_rxtimer;
-	QTimer *m_txtimer;
-	AudioEngine *m_audio;
 	uint8_t m_iseq;
 	uint8_t m_oseq;
 	QQueue<int16_t> m_audioq;
@@ -93,7 +88,8 @@ private:
 	QString m_ttstext;
 	uint16_t m_ttscnt;
 	int m_cnt;
-	//qreal m_rxgain;
+	bool m_wt;
+    bool m_regreq;
 #ifdef USE_FLITE
 	cst_voice *voice_slt;
 	cst_voice *voice_kal;

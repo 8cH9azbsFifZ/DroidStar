@@ -21,7 +21,6 @@
 #include "Golay24128.h"
 #include "chamming.h"
 #include "MMDVMDefines.h"
-#include <iostream>
 #include <cstring>
 #ifdef USE_MD380_VOCODER
 #include <md380_vocoder.h>
@@ -749,7 +748,7 @@ void YSF::transmit()
 	else{
 		if(m_txfullrate){
 			s = 11;
-			vocoder.encode_4400(pcm, ambe_frame);
+            m_imbevocoder.encode_4400(pcm, ambe_frame);
 		}
 		else{
 			s = 7;
@@ -791,7 +790,7 @@ void YSF::send_frame()
 		m_modeinfo.stream_state = TRANSMITTING;
 
 		if(!m_txcnt){
-			encode_header();
+            encode_header();
 		}
 		else{
 			m_txfullrate ? encode_vw() : encode_dv2();
@@ -1393,7 +1392,7 @@ void YSF::process_rx_data()
 		for(int i = 0; i < 11; ++i){
 			imbe[i] = m_rximbecodecq.dequeue();
 		}
-		vocoder.decode_4400(pcm, imbe);
+        m_imbevocoder.decode_4400(pcm, imbe);
 		m_audio->write(pcm, 160);
 		emit update_output_level(m_audio->level());
 	}

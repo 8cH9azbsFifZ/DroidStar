@@ -11,20 +11,20 @@ int main(int argc, char *argv[])
     QQuickStyle::setStyle("Fusion");
     app.setWindowIcon(QIcon(":/images/droidstar.png"));
     qmlRegisterType<DroidStar>("org.dudetronics.droidstar", 1, 0, "DroidStar");
-
     QQmlApplicationEngine engine;
 #ifdef USE_FLITE
     engine.rootContext()->setContextProperty("USE_FLITE", QVariant(true));
 #else
     engine.rootContext()->setContextProperty("USE_FLITE", QVariant(false));
 #endif
-    const QUrl url(u"qrc:/DroidStar/main.qml"_qs);
-    QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
-        &app, [url](QObject *obj, const QUrl &objUrl) {
-            if (!obj && url == objUrl)
-                QCoreApplication::exit(-1);
-        }, Qt::QueuedConnection);
-    engine.load(url);
 
+    QObject::connect(
+        &engine,
+        &QQmlApplicationEngine::objectCreationFailed,
+        &app,
+        []() { QCoreApplication::exit(-1); },
+        Qt::QueuedConnection);
+    engine.loadFromModule("DroidStarApp", "Main");
     return app.exec();
+
 }

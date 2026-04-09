@@ -15,7 +15,6 @@
 	along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "mode.h"
-#include <iostream>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #else
@@ -102,6 +101,7 @@ void Mode::init(QString callsign, uint32_t dmrid, uint16_t nxdnid, char module, 
 	m_hwtx = false;
 	m_tx = false;
 	m_ttsid = 0;
+    m_watchdog = 0;
 	m_rxwatchdog = 0;
 
 	m_modeinfo.callsign = callsign;
@@ -164,7 +164,9 @@ void Mode::mmdvm_connect_status(bool s)
 
 void Mode::in_audio_vol_changed(qreal v)
 {
-	m_audio->set_input_volume(v / m_attenuation);
+	if (m_audio) {
+		m_audio->set_input_volume(v / m_attenuation);
+	}
 }
 
 void Mode::out_audio_vol_changed(qreal v)
@@ -181,7 +183,7 @@ void Mode::begin_connect()
 {
 	m_modeinfo.status = CONNECTING;
 
-    if((m_vocoder != "") && (m_mode != "M17")){
+    if((m_vocoder != "None") && (m_vocoder != "Software vocoder") && (m_mode != "M17")){
         m_hwrx = true;
         m_hwtx = true;
         m_modeinfo.hw_vocoder_loaded = true;
@@ -206,9 +208,11 @@ void Mode::begin_connect()
         m_modem = new SerialModem(m_mode);
         m_modem->set_modem_flags(m_rxInvert, m_txInvert, m_pttInvert, m_useCOSAsLockout, m_duplex);
         m_modem->set_modem_params(m_baud, m_rxfreq, m_txfreq, m_txDelay, m_rxLevel, m_rfLevel, m_ysfTXHang, m_cwIdTXLevel, m_dstarTXLevel, m_dmrTXLevel, m_ysfTXLevel, m_p25TXLevel, m_nxdnTXLevel, m_pocsagTXLevel, m_m17TXLevel);
+        m_modem->set_cc(m_dmrColorCode);
         connect(m_modem, SIGNAL(connected(bool)), this, SLOT(mmdvm_connect_status(bool)));
         connect(m_modem, SIGNAL(modem_data_ready(QByteArray)), this, SLOT(process_modem_data(QByteArray)));
         connect(m_modem, SIGNAL(modem_ready()), this, SLOT(host_lookup()));
+        connect(this, SIGNAL(update_mode(uint8_t)), m_modem, SLOT(set_mode(uint8_t)));
         m_modem->connect_to_serial(m_modemport);
 #endif
     }
@@ -216,7 +220,8 @@ void Mode::begin_connect()
 
 void Mode::host_lookup()
 {
-    if(m_mdirect && (m_mode == "M17")){ // MMDVM_DIRECT currently only supported by M17
+	qDebug() << "Mode::host_lookup() called for mode" << m_mode << "host=" << m_modeinfo.host << "mdirect=" << m_mdirect << "ipv6=" << m_ipv6;
+    if(m_mdirect && ((m_mode == "M17") || (m_mode == "DMR"))){ // MMDVM_DIRECT currently only supported by M17 and DMR
         mmdvm_direct_connect();
     }
     else if(m_ipv6 && (m_modeinfo.host != "none")){
@@ -264,7 +269,7 @@ void Mode::start_tx()
 	}
 #endif
 	if(!m_txtimer->isActive()){
-		if(m_ttsid == 0){
+		if(m_ttsid == 0 && m_audio){
 			m_audio->set_input_buffer_size(640);
 			m_audio->start_capture();
 			//audioin->start(&audio_buffer);
@@ -280,63 +285,12 @@ void Mode::stop_tx()
 
 bool Mode::load_vocoder_plugin()
 {
-#ifdef VOCODER_PLUGIN
-	QString config_path = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-#if !defined(Q_OS_ANDROID) && !defined(Q_OS_WIN)
-	config_path += "/dudetronics";
-#endif
-#if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
-	QString voc = config_path + "/vocoder_plugin." + QSysInfo::productType() + "." + QSysInfo::currentCpuArchitecture();
-#else
-	QStringList l = QSysInfo::buildAbi().split('-');
-	//QString voc = config_path + "/vocoder_plugin." + QSysInfo::kernelType() + "." + QSysInfo::currentCpuArchitecture();
-	QString voc = config_path + "/vocoder_plugin." + QSysInfo::kernelType() + "." + l.at(0);
-#endif
-#if !defined(Q_OS_WIN)
-	//QString voc = "/mnt/data/src/mbe_vocoder/vocoder_plugin.linux.x86_64.so";
-	void* a = dlopen(voc.toLocal8Bit(), RTLD_LAZY);
-	if (!a) {
-		qDebug() << "Cannot load library: " << QString::fromLocal8Bit(dlerror());
-		return false;
-	}
-	dlerror();
-
-	create_t* create_a = (create_t*) dlsym(a, "create");
-	const char* dlsym_error = dlerror();
-
-	if (dlsym_error) {
-		qDebug() << "Cannot load symbol create: " << QString::fromLocal8Bit(dlsym_error);
+	if(m_vocoder == "None") {
 		return false;
 	}
 
-	m_mbevocoder = create_a();
-	qDebug() << voc + " loaded";
-	return true;
-#else
-	HINSTANCE hinstvoclib;
-	hinstvoclib = LoadLibrary(reinterpret_cast<LPCWSTR>(voc.utf16()));
-
-	if (hinstvoclib != NULL) {
-		create_t* create_a = (create_t*)GetProcAddress(hinstvoclib, "create");
-
-		if (create_a != NULL) {
-			m_mbevocoder = create_a();
-			qDebug() << voc + " loaded";
-			return true;
-		}
-		else{
-			return false;
-		}
-	}
-	else{
-		return false;
-	}
-#endif
-#else
-    qDebug() << "new vocoder";
-	m_mbevocoder = new VocoderPlugin();
-	return true;
-#endif
+    m_mbevocoder = new MBEVocoder();
+    return true;
 }
 
 void Mode::deleteLater()

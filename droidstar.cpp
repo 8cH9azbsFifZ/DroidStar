@@ -20,9 +20,7 @@
 #ifdef Q_OS_ANDROID
 #include <QCoreApplication>
 #include <QJniObject>
-#endif
-#ifdef Q_OS_IOS
-#include "micpermission.h"
+#include <QtCore/private/qandroidextras_p.h>
 #endif
 #include <QStandardPaths>
 #include <QFile>
@@ -30,10 +28,9 @@
 #include <QDir>
 #include <QFont>
 #include <QFontDatabase>
+#include <QSslSocket>
 #include <cstring>
-#include <stdio.h>
 #include <fcntl.h>
-#include <iostream>
 
 DroidStar::DroidStar(QObject *parent) :
 	QObject(parent),
@@ -70,7 +67,8 @@ DroidStar::DroidStar(QObject *parent) :
 	qDebug() << "Version: " << QSysInfo::productVersion();
 	qDebug() << "Kernel type: " << QSysInfo::kernelType();
 	qDebug() << "Kernel version: " << QSysInfo::kernelVersion();
-	qDebug() << "Software version: " << VERSION_NUMBER;
+    qDebug() << "Software version: " << VERSION_NUMBER;
+    qDebug() << "OpenSSL: " << QSslSocket::supportsSsl();
 }
 
 DroidStar::~DroidStar()
@@ -78,8 +76,15 @@ DroidStar::~DroidStar()
 }
 
 #ifdef Q_OS_ANDROID
+using namespace Qt::StringLiterals;
+
 void DroidStar::keepScreenOn()
 {
+    QMicrophonePermission microphonePermission;
+    if (qApp->checkPermission(microphonePermission) != Qt::PermissionStatus::Granted) {
+        qApp->requestPermission(microphonePermission, this, &DroidStar::keepScreenOn);
+        return;
+    }
 	char const * const action = "addFlags";
 	QNativeInterface::QAndroidApplication::runOnAndroidMainThread([action](){
 	QJniObject activity = QNativeInterface::QAndroidApplication::context();
@@ -87,17 +92,24 @@ void DroidStar::keepScreenOn()
 		QJniObject window = activity.callObjectMethod("getWindow", "()Landroid/view/Window;");
 
 		if (window.isValid()) {
-			const int FLAG_KEEP_SCREEN_ON = 128;
+            const int FLAG_KEEP_SCREEN_ON = 0x00000080;
 			window.callMethod<void>("addFlags", "(I)V", FLAG_KEEP_SCREEN_ON);
 		}
 	}});
-}
-void DroidStar::reset_connect_status()
-{
-	if(connect_status == Mode::CONNECTED_RW){
-        connect_status = Mode::CONNECTING;
-        process_connect();
-	}
+/*
+    QMicrophonePermission microphonePermission;
+    if (qApp->checkPermission(microphonePermission) != Qt::PermissionStatus::Granted) {
+        qApp->requestPermission(microphonePermission, this, &DroidStar::keepScreenOn);
+    }
+*/
+    if (QNativeInterface::QAndroidApplication::sdkVersion() >= __ANDROID_API_T__) {
+        const auto notificationPermission = "android.permission.POST_NOTIFICATIONS"_L1;
+        auto requestResult = QtAndroidPrivate::requestPermission(notificationPermission);
+        if (requestResult.result() != QtAndroidPrivate::Authorized) {
+            qWarning() << "Failed to acquire permission to post notifications "
+                          "(required for Android 13+)";
+        }
+    }
 }
 #endif
 
@@ -110,6 +122,7 @@ void DroidStar::discover_devices()
 	m_playbacks.append("OS Default");
 	m_captures.append("OS Default");
 	m_vocoders.append("Software vocoder");
+    m_vocoders.append("None");
 	m_modems.append("None");
 	m_playbacks.append(AudioEngine::discover_audio_devices(AUDIO_OUT));
 	m_captures.append(AudioEngine::discover_audio_devices(AUDIO_IN));
@@ -178,6 +191,9 @@ void DroidStar::file_downloaded(QString filename)
 		else if(filename == "M17Hosts-full.csv" && m_protocol == "M17"){
 			process_m17_hosts();
 		}
+		else if(filename == "ASLHosts.txt" && m_protocol == "IAX"){
+			process_asl_hosts();
+		}
 		else if(filename == "DMRIDs.dat"){
 			process_dmr_ids();
 		}
@@ -219,9 +235,64 @@ void DroidStar::tts_text_changed(QString ttstxt)
 	emit input_source_changed(m_tts, m_ttstxt);
 }
 
+void DroidStar::obtain_asl_wt_creds()
+{
+	QNetworkAccessManager *manager = new QNetworkAccessManager(this);
+	QUrl url("https://www.allstarlink.org/portal/login.php");
+	QNetworkRequest request(url);
+	request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
+
+	QByteArray postData;
+	postData.append("user=" + QUrl::toPercentEncoding(m_callsign.toUtf8()));
+	postData.append("&pass=" + QUrl::toPercentEncoding(m_asl_password.toUtf8()));
+
+	connect(manager, &QNetworkAccessManager::finished, this, [=](QNetworkReply *reply) {
+		if (reply->error() == QNetworkReply::NoError) {
+			QUrl url("https://www.allstarlink.org/portal/webtransceiver.php?node=12345");
+			QNetworkRequest request(url);
+			
+			connect(manager, &QNetworkAccessManager::finished, this, [=](QNetworkReply *reply) {
+				if (reply->error() == QNetworkReply::NoError) {
+					QString html = reply->readAll();
+					QStringList l = html.split('\n');
+					for (int i = 0; i < l.size(); i++) {
+						if (l.at(i).contains("callingName")) {
+							QStringList ll = l.at(i).split('"');
+							m_wt_callingname = ll.at(3);
+							m_wt_callingname_pass = m_asl_password;
+                            manager->disconnect();
+                            qDebug() << "ASL authentication complete";
+                            process_connect();
+							break;
+						}
+					}
+				} else {
+                    qDebug() << "Error: " << reply->errorString();
+                    m_errortxt = "ASL WT authentication failed";
+                    emit connect_status_changed(5);
+				}
+				reply->deleteLater();
+			});
+
+			manager->get(request);
+		} else {
+            qDebug() << "Error: " << reply->errorString();
+            m_errortxt = "ASL WT login failed";
+            emit connect_status_changed(5);
+		}
+		reply->deleteLater();
+	});
+
+	manager->post(request, postData);
+}
+
 void DroidStar::process_connect()
 {
 	if(connect_status != Mode::DISCONNECTED){
+        if(connect_status == Mode::TIMEOUT){
+            m_errortxt = "Connection timed out";
+            emit connect_status_changed(5);
+        }
 		connect_status = Mode::DISCONNECTED;
 		m_modethread->quit();
 		m_data1.clear();
@@ -232,11 +303,15 @@ void DroidStar::process_connect()
 		m_data6.clear();
 		emit connect_status_changed(0);
 		emit update_log("Disconnected");
+#ifdef Q_OS_ANDROID
+        QJniObject::callStaticMethod<void>(
+            "org/dudetronics/droidstar/NotificationClient",
+            "denotify",
+            "(Landroid/content/Context;)V",
+            QNativeInterface::QAndroidApplication::context());
+#endif
 	}
 	else{
-#ifdef Q_OS_IOS
-		MicPermission::check_permission();
-#endif
 		if(m_protocol == "REF"){
 			m_refname = m_saved_refhost;
 		}
@@ -266,9 +341,12 @@ void DroidStar::process_connect()
         }
         else if(m_protocol == "IAX"){
             m_refname = m_saved_iaxhost;
+            if ((m_hostmap[m_refname].contains(".nodes.allstarlink.org")) && (m_wt_callingname.isEmpty() || (m_asl_password != m_wt_callingname_pass))) {
+                obtain_asl_wt_creds();
+                return;
+            }
         }
 
-		emit connect_status_changed(1);
 		connect_status = Mode::CONNECTING;
 		QStringList sl;
 
@@ -293,8 +371,8 @@ void DroidStar::process_connect()
             return;
         }
 
-		QString vocoder = "";
-		if( (m_vocoder != "Software vocoder") && (m_vocoder.contains(':')) ){
+		QString vocoder = m_vocoder;
+		if( (m_vocoder != "None") && (m_vocoder != "Software vocoder") && (m_vocoder.contains(':') ) ){
 			QStringList vl = m_vocoder.split(':');
 			vocoder = vl.at(1);
 		}
@@ -326,7 +404,7 @@ void DroidStar::process_connect()
         if(m_protocol == "IAX"){
             QString iaxuser = sl.at(2).simplified();
             QString iaxpass = sl.at(3).simplified();
-            m_mode->set_iax_params(iaxuser, iaxpass, m_refname, m_host, m_port);
+            m_mode->set_iax_params(iaxuser, iaxpass, m_wt_callingname, m_refname, m_host, m_port);
             connect(this, SIGNAL(send_dtmf(QByteArray)), m_mode, SLOT(send_dtmf(QByteArray)));
         }
 
@@ -354,6 +432,10 @@ void DroidStar::process_connect()
 		connect(this, SIGNAL(rptr2_changed(QString)), m_mode, SLOT(rptr2_changed(QString)));
 		connect(this, SIGNAL(usrtxt_changed(QString)), m_mode, SLOT(usrtxt_changed(QString)));
         connect(this, SIGNAL(debug_changed(bool)), m_mode, SLOT(debug_changed(bool)));
+		// Allow modes to request the main app to toggle the connect button (simulate user)
+		connect(m_mode, SIGNAL(request_connect_toggle()), this, SLOT(process_connect()));
+		connect(m_mode, SIGNAL(request_reconnect(int)), this, SLOT(schedule_reconnect(int)));
+        emit connect_status_changed(1);
 		emit module_changed(m_module);
 		emit mycall_changed(m_mycall);
 		emit urcall_changed(m_urcall);
@@ -376,6 +458,7 @@ void DroidStar::process_connect()
 				}
 			}
 			m_mode->set_dmr_params(m_essid, dmrpass, m_latitude, m_longitude, m_location, m_description, m_freq, m_url, m_swid, m_pkgid, m_dmropts);
+			m_mode->set_dmr_cc(m_dmrColorCode);
 			connect(this, SIGNAL(dmr_tgid_changed(int)), m_mode, SLOT(dmr_tgid_changed(int)));
 			connect(this, SIGNAL(dmrpc_state_changed(int)), m_mode, SLOT(dmrpc_state_changed(int)));
 			connect(this, SIGNAL(slot_changed(int)), m_mode, SLOT(slot_changed(int)));
@@ -387,6 +470,7 @@ void DroidStar::process_connect()
 		if(m_protocol == "M17"){
 			connect(this, SIGNAL(m17_rate_changed(int)), m_mode, SLOT(rate_changed(int)));
 			connect(this, SIGNAL(m17_can_changed(int)), m_mode, SLOT(can_changed(int)));
+            connect(this, SIGNAL(m17_send_sms(QString)), m_mode, SLOT(tx_packet(QString)));
             if(m_mdirect){
                 connect(this, SIGNAL(dst_changed(QString)), m_mode, SLOT(dst_changed(QString)));
             }
@@ -407,6 +491,12 @@ void DroidStar::process_connect()
 	qDebug() << "process_connect called m_protocol == " << m_protocol;
 	qDebug() << "process_connect called m_port == " << m_port;
 */
+}
+
+void DroidStar::schedule_reconnect(int ms)
+{
+	qDebug() << "schedule_reconnect called, reconnecting in" << ms << "ms";
+	QTimer::singleShot(ms, this, SLOT(process_connect()));
 }
 
 void DroidStar::process_host_change(const QString &h)
@@ -545,6 +635,7 @@ void DroidStar::save_settings()
 	m_settings->setValue("ESSID", m_essid);
 	m_settings->setValue("BMPASSWORD", m_bm_password);
 	m_settings->setValue("TGIFPASSWORD", m_tgif_password);
+	m_settings->setValue("ASLPASSWORD", m_asl_password);
 	m_settings->setValue("DMRTGID", m_dmr_destid);
 	m_settings->setValue("DMRLAT", m_latitude);
 	m_settings->setValue("DMRLONG", m_longitude);
@@ -607,6 +698,7 @@ void DroidStar::process_settings()
 	m_essid = m_settings->value("ESSID").toString().simplified().toUInt();
 	m_bm_password = m_settings->value("BMPASSWORD").toString().simplified();
 	m_tgif_password = m_settings->value("TGIFPASSWORD").toString().simplified();
+	m_asl_password = m_settings->value("ASLPASSWORD").toString().simplified();
 	m_latitude = m_settings->value("DMRLAT", "0").toString().simplified();
 	m_longitude = m_settings->value("DMRLONG", "0").toString().simplified();
 	m_location = m_settings->value("DMRLOC").toString().simplified();
@@ -986,7 +1078,12 @@ void DroidStar::process_iax_hosts()
     for (const auto& i : std::as_const(m_customhosts)){
         QStringList line = i.simplified().split(' ');
         if(line.at(0) == "IAX"){
-            m_hostmap[line.at(1).simplified()] = line.at(2).simplified() + "," + line.at(3).simplified() + "," + line.at(4).simplified() + "," + line.at(5).simplified();
+            if(line.at(2).simplified() == "wt"){
+               m_hostmap[line.at(1).simplified()] = line.at(1).simplified() + ".nodes.allstarlink.org," + line.at(3).simplified() + "," + line.at(4).simplified() + "," + line.at(5).simplified();
+            }
+            else{
+                m_hostmap[line.at(1).simplified()] = line.at(2).simplified() + "," + line.at(3).simplified() + "," + line.at(4).simplified() + "," + line.at(5).simplified();
+            }
         }
     }
 
@@ -995,6 +1092,10 @@ void DroidStar::process_iax_hosts()
         m_hostsmodel.append(i.key());
         ++i;
     }
+}
+
+void DroidStar::process_asl_hosts() {
+	// TODO - implement ASL hosts
 }
 
 void DroidStar::process_dmr_ids()
@@ -1011,7 +1112,12 @@ void DroidStar::process_dmr_ids()
 				QStringList llids = lids.simplified().split(' ');
 
 				if(llids.size() >= 2){
-					m_dmrids[llids.at(0).toUInt()] = llids.at(1);
+                    if(llids.size() == 3){
+                         m_dmrids[llids.at(0).toUInt()] = llids.at(1) + " " + llids.at(2);
+                    }
+                    else{
+                        m_dmrids[llids.at(0).toUInt()] = llids.at(1);
+                    }
 				}
 			}
 		}
@@ -1125,6 +1231,11 @@ void DroidStar::check_host_files()
 		download_file("/M17Hosts-full.csv");
 	}
 
+	check_file.setFile(config_path + "/ASLHosts.txt");
+	if( (!check_file.exists() && !check_file.isFile()) || m_update_host_files ){
+        //download_file("/ASLHosts.txt");
+	}
+
 	check_file.setFile(config_path + "/DMRIDs.dat");
 	if(!check_file.exists() && !check_file.isFile()){
 		download_file("/DMRIDs.dat");
@@ -1141,6 +1252,7 @@ void DroidStar::check_host_files()
 		process_nxdn_ids();
 	}
 	m_update_host_files = false;
+
 	//process_mode_change(ui->modeCombo->currentText().simplified());
 /*
 #if defined(Q_OS_ANDROID)
@@ -1184,6 +1296,12 @@ void DroidStar::update_data(Mode::MODEINFO info)
 		return;
 	}
 
+    if((connect_status == Mode::CONNECTED_RW) && (info.status == Mode::TIMEOUT)){
+        connect_status = Mode::TIMEOUT;
+        process_connect();
+        return;
+    }
+
 	if( (connect_status == Mode::CONNECTING) && ( info.status == Mode::CONNECTED_RW)){
 		connect_status = Mode::CONNECTED_RW;
 		emit connect_status_changed(2);
@@ -1194,7 +1312,8 @@ void DroidStar::update_data(Mode::MODEINFO info)
 		if(m_mycall.isEmpty()) set_mycall(m_callsign);
 		if(m_urcall.isEmpty()) set_urcall("CQCQCQ");
 		if(m_rptr1.isEmpty()) set_rptr1(m_callsign + " " + m_module);
-		emit update_log("Connected to " + m_protocol + " " + m_refname + " " + m_host + ":" + QString::number(m_port));
+        QString s = "Connected to " + m_protocol + " " + m_refname + " " + m_host + ":" + QString::number(m_port);
+        emit update_log(s);
 
 		if(info.sw_vocoder_loaded){
 			emit update_log("Vocoder plugin loaded");
@@ -1203,6 +1322,15 @@ void DroidStar::update_data(Mode::MODEINFO info)
 			emit update_log("Vocoder plugin not loaded");
 			emit open_vocoder_dialog();
 		}
+#ifdef Q_OS_ANDROID
+        QJniObject javaNotification = QJniObject::fromString(s);
+        QJniObject::callStaticMethod<void>(
+            "org/dudetronics/droidstar/NotificationClient",
+            "notify",
+            "(Landroid/content/Context;Ljava/lang/String;)V",
+            QNativeInterface::QAndroidApplication::context(),
+            javaNotification.object<jstring>());
+#endif
 	}
 
 	m_netstatustxt = "Connected ping cnt: " + QString::number(info.count);
@@ -1320,12 +1448,28 @@ void DroidStar::update_data(Mode::MODEINFO info)
 	else if(m_protocol == "M17"){
 		m_data1 = info.src;
         m_data2 = info.dst + " " + info.module;
-		m_data3 = info.type ? "3200 Voice" : "1600 V/D";
+
+        switch(info.type){
+        case 0:
+           m_data3 =  "1600 V/D";
+            m_data5 = QString::number(info.streamid, 16);
+            break;
+        case 1:
+            m_data3 = "3200 Voice";
+            m_data5 = QString::number(info.streamid, 16);
+            break;
+        case 2:
+            m_data3 = "Packet";
+            m_data5 = info.usertxt.left(20);
+            update_log(info.src.section(" ", 0, 0) + ": " + info.usertxt);
+            break;
+        }
+
 		if(info.frame_number){
 			QString n = QString("%1").arg(info.frame_number, 4, 16, QChar('0'));
 			m_data4 = n;
 		}
-		m_data5 = QString::number(info.streamid, 16);
+
 	}
 	else if(m_protocol == "IAX"){
 

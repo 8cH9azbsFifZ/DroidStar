@@ -43,7 +43,8 @@ signals:
 	void in_audio_vol_changed(qreal);
 	void tx_pressed();
 	void tx_released();
-	void tx_clicked(bool);
+    void tx_clicked(bool);
+    void m17_send_sms(QString);
 	void dmrpc_state_changed(int);
 	void dmr_tgid_changed(int);
 	void m17_rate_changed(int);
@@ -67,7 +68,7 @@ public slots:
 	void set_callsign(const QString &callsign) {  m_callsign = callsign.simplified(); save_settings(); }
 	void set_dmrtgid(const QString &dmrtgid) { m_dmr_destid = dmrtgid.simplified().toUInt(); save_settings(); }
 	void set_slot(const int slot) {emit slot_changed(slot); }
-	void set_cc(const int cc) {emit cc_changed(cc); }
+	void set_cc(const int cc) {emit cc_changed(cc); m_dmrColorCode = cc; }
 	void tgid_text_changed(QString s){emit dmr_tgid_changed(s.toUInt());}
 	void set_dmrid(const QString &dmrid) { m_dmrid = dmrid.simplified().toUInt(); save_settings(); }
 	void set_essid(const QString &essid)
@@ -82,6 +83,7 @@ public slots:
 	}
 	void set_bm_password(const QString &bmpwd) { m_bm_password = bmpwd; save_settings(); }
 	void set_tgif_password(const QString &tgifpwd) { m_tgif_password = tgifpwd; save_settings(); }
+	void set_asl_password(const QString &aslpwd) { m_asl_password = aslpwd; save_settings(); }
 	void set_latitude(const QString &lat){ m_latitude = lat; save_settings(); }
 	void set_longitude(const QString &lon){ m_longitude = lon; save_settings(); }
 	void set_location(const QString &loc){ m_location = loc; save_settings(); }
@@ -138,9 +140,11 @@ public slots:
 
 	void m17_rate_changed(bool r) { emit m17_rate_changed((int)r); }
 	void process_connect();
+	void schedule_reconnect(int ms);
 	void press_tx();
 	void release_tx();
 	void click_tx(bool);
+    void m17_sms_pressed(QString sms) { emit m17_send_sms(sms.left(822)); }
 	void process_settings();
 	void check_host_files();
 	void update_host_files();
@@ -174,6 +178,7 @@ public slots:
 	QString get_essid() { return m_essid ? QString("%1").arg(m_essid - 1, 2, 10, QChar('0')) : "None"; }
 	QString get_bm_password() { return m_bm_password; }
 	QString get_tgif_password() { return m_tgif_password; }
+	QString get_asl_password() { return m_asl_password; }
 	QString get_latitude() { return m_latitude; }
 	QString get_longitude() { return m_longitude; }
 	QString get_location() { return m_location; }
@@ -229,7 +234,6 @@ public slots:
 	QString get_modemM17CAN() { return m_modemM17CAN; }
 #if defined(Q_OS_ANDROID)
 	QString get_platform() { return QSysInfo::productType(); }
-	void reset_connect_status();
 	QString get_monofont() { return "Droid Sans Mono"; }
 #elif defined(Q_OS_WIN)
 	QString get_platform() { return QSysInfo::kernelType(); }
@@ -242,7 +246,7 @@ public slots:
 #endif
 	QString get_arch() { return QSysInfo::currentCpuArchitecture(); }
 	QString get_build_abi() { return QSysInfo::buildAbi(); }
-	QString get_software_build() { return VERSION_NUMBER; }
+    QString get_software_build() { return VERSION_NUMBER; }
 
 	void download_file(QString, bool u = false);
 	void file_downloaded(QString);
@@ -251,6 +255,7 @@ public slots:
 	void set_output_level(unsigned short l){ m_outlevel = l; }
 	void tts_changed(QString);
 	void tts_text_changed(QString);
+	void obtain_asl_wt_creds();
 private:
 	int connect_status;
 	bool m_update_host_files;
@@ -263,6 +268,7 @@ private:
 	QString m_protocol;
 	QString m_bm_password;
 	QString m_tgif_password;
+	QString m_asl_password;
 	QString m_latitude;
 	QString m_longitude;
 	QString m_location;
@@ -337,6 +343,8 @@ private:
 	QStringList m_playbacks;
 	QStringList m_captures;
     bool m_mdirect;
+	QString m_wt_callingname;
+	QString m_wt_callingname_pass;
 
 	int m_tts;
 	QString m_ttstxt;
@@ -362,6 +370,7 @@ private:
 	bool m_modemTxInvert;
 	bool m_modemRxInvert;
 	bool m_modemPTTInvert;
+	uint32_t m_dmrColorCode;
 #ifdef Q_OS_ANDROID
     AndroidSerialPort *m_USBmonitor;
 #endif
@@ -379,6 +388,7 @@ private slots:
 	void process_nxdn_hosts();
 	void process_m17_hosts();
     void process_iax_hosts();
+    void process_asl_hosts();
 	void process_dmr_ids();
 	void process_nxdn_ids();
 	void update_data(Mode::MODEINFO);

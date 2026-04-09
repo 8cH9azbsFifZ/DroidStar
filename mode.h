@@ -24,11 +24,7 @@
 #include <flite/flite.h>
 #endif
 #include "imbe_vocoder/imbe_vocoder_api.h"
-#ifdef VOCODER_PLUGIN
-#include "vocoder_plugin.h"
-#else
-#include "mbe/vocoder_plugin_api.h"
-#endif
+#include "mbe/mbevocoder_api.h"
 #include "audioengine.h"
 #if !defined(Q_OS_IOS)
 #include "serialambe.h"
@@ -70,7 +66,8 @@ public:
 		m_m17TXLevel = m17TXLevel;
 	}
 	virtual void set_dmr_params(uint8_t, QString, QString, QString, QString, QString, QString, QString, QString, QString, QString) {}
-	virtual void set_iax_params(QString, QString, QString, QString, int) {}
+	virtual void set_iax_params(QString, QString, QString, QString, QString, int) {}
+	void set_dmr_cc(uint32_t cc) { m_dmrColorCode = cc; }
 	bool get_hwrx() { return m_hwrx; }
 	bool get_hwtx() { return m_hwtx; }
 	void set_hostname(std::string);
@@ -112,6 +109,7 @@ public:
 	} m_modeinfo;
 	enum{
 		DISCONNECTED,
+        TIMEOUT,
 		CLOSED,
 		CONNECTING,
 		DMR_AUTH,
@@ -128,12 +126,19 @@ public:
 		STREAM_IDLE,
 		TRANSMITTING,
 		TRANSMITTING_MODEM,
-		STREAM_UNKNOWN
+        STREAM_UNKNOWN,
+        PACKET_RECEIVED,
+        PACKET_SENT
 	};
 signals:
 	void update(Mode::MODEINFO);
     void update_log(QString);
 	void update_output_level(unsigned short);
+	void update_mode(uint8_t);
+    // Request that the application toggle the main connect button (same hook as UI)
+    void request_connect_toggle();
+	// Request the application schedule a reconnect after the given milliseconds
+	void request_reconnect(int ms);
 protected slots:
 	virtual void send_disconnect(){}
 	virtual void hostname_lookup(QHostInfo){}
@@ -167,6 +172,7 @@ protected:
 	QUdpSocket *m_udp = nullptr;
 	QHostAddress m_address;
 	char m_module;
+    uint8_t m_watchdog;
 	uint32_t m_dmrid;
 	uint16_t m_nxdnid;
 	QString m_refname;
@@ -189,7 +195,7 @@ protected:
 	QTimer *m_ping_timer;
 	QTimer *m_txtimer;
 	QTimer *m_rxtimer;
-	AudioEngine *m_audio;
+	AudioEngine *m_audio = nullptr;
 	QString m_audioin;
 	QString m_audioout;
     bool m_mdirect;
@@ -200,12 +206,8 @@ protected:
 	QQueue<uint8_t> m_rxcodecq;
 	QQueue<uint8_t> m_txcodecq;
 	QQueue<uint8_t> m_rxmodemq;
-	imbe_vocoder vocoder;
-#ifdef VOCODER_PLUGIN
-	Vocoder *m_mbevocoder;
-#else
-	VocoderPlugin *m_mbevocoder;
-#endif
+    imbe_vocoder m_imbevocoder;
+    MBEVocoder *m_mbevocoder;
 	QString m_vocoder;
 	QString m_modemport;
 #if defined(Q_OS_IOS)
